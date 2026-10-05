@@ -1,0 +1,432 @@
+---
+title: "Analysis of honey bee wing shape in Algeria"
+subtitle: ""
+author: 
+  - name: "Yamina Haider"
+    affiliation: University of Boumerdes, Algeria
+    orcid: 0000-0001-6085-3513
+  - name: "Adam Tofilski"
+    affiliation: University of Agriculture in Krakow, Poland
+    orcid: 0000-0002-3898-7029
+date: today
+date-format: iso
+format: 
+  html:
+    self-contained: true
+    toc: true
+---
+
+```{r setup, include = FALSE}
+
+knitr::opts_chunk$set(
+  echo = TRUE,
+  message = FALSE,
+  warning = FALSE,
+  tidy = TRUE, tidy.opts = list(arrow=TRUE, indent=2)
+)
+options(digits=3) 
+
+setwd("C:/my_programs/GitHub/Apis-mellifera-DZ")
+```
+
+## Libraries
+
+```{r libraries}
+# calculations
+library(geomorph) # GPA 
+library(Morpho) # CVA
+library(IdentiFlyR)  # classification
+library(phangorn) #UPGMA
+
+# plotting and visualization
+library(ggplot2) # plots
+ggplot2::theme_set(theme_light())
+library(rnaturalearth) # maps
+library(terra) # raster maps
+library(ggpubr) # ggarrange
+
+```
+
+## Variable names
+
+```{r var-names}
+
+p = 19 # number of landmarks
+k = 2  # number of dimensions, in this case 2 for coordinates (x, y)
+
+# create coordinates names used by IdentiFly
+xyNames = c("x1", "y1")
+for (i in 2:p) {
+  xyNames = c(xyNames, paste0("x", i))
+  xyNames = c(xyNames, paste0("y", i))
+}
+xyNames
+
+# The number of principal components used is 2*p-4 = 34, which is equal to the degrees of freedom
+# create principal components names used by prcomp
+pcNames <- paste0("PC", 1:(2*p-4))
+pcNames
+
+# define which landmarks are connected by lines in wireframe graph
+link.x <- c(1, 1, 2, 2, 3,  3, 4,  4,  5, 6, 7,  7,  7, 8,  9,  9, 10, 11, 11, 12, 13, 14, 15, 16, 17)
+link.y <- c(2, 3, 4, 5, 6, 19, 6, 10, 12, 8, 8, 14, 19, 9, 10, 15, 11, 12, 16, 13, 18, 15, 16, 17, 18)
+links.apis <- cbind(link.x, link.y)
+
+GP1 <- gridPar(pt.bg = "blue", link.col = "blue", pt.size = 1, tar.pt.bg = "red",
+  tar.link.col = "red")
+
+pointSize = 1
+
+```
+
+## Read data
+We used following datasets available at Zenodo: <a href="#Haider & Tofilski, 2024">Haider & Tofilski, 2024</a>, <a href="#Haider & Tofilski, 2026">Haider & Tofilski, 2026</a>, <a href="#Tofilski, 2026">Tofilski, 2026</a>
+As references samples of *A. m. intermissa* and *A. m. sahariensis* we used supplementary data provided by <a href="#Bakhchou et al., 2025">Bakhchou et al., 2025</a>
+
+```{r read-coordinates}
+
+wings = read.csv("https://zenodo.org/records/18360081/files/DZ-2025-raw-coordinates.csv")
+wings <- rbind(wings, read.csv("https://zenodo.org/records/18359322/files/DZ-2018-raw-coordinates.csv"))
+wings <- rbind(wings, read.csv("https://zenodo.org/records/13939415/files/DZ-2024-raw-coordinates.csv"))
+
+geoData = read.csv("https://zenodo.org/records/18360081/files/DZ-2025-data.csv")
+geoData <- rbind(geoData, read.csv("https://zenodo.org/records/18359322/files/DZ-2018-data.csv"))
+geoData2024 = read.csv("https://zenodo.org/records/13939415/files/DZ-2024-data.csv")
+geoData2024$notes = "Mediterranean"
+geoData <- rbind(geoData, geoData2024)
+
+names(geoData)[names(geoData) == "notes"] <- "climate"
+geoData$climate <- factor(geoData$climate, levels = c("desert", "semiarid", "Mediterranean"))  #specify order
+
+# read reference of A. m. intermissa and A. m. sahariensis
+dataMA = read.csv("MA.csv", sep = ";")
+# use only A. m. intermissa and A. m. sahariensis
+dataMA = dataMA[dataMA$notes %in% c("A. m. intermissa", "A. m. sahariensis"),]
+
+wingsMA = dataMA[,c("file", xyNames)]
+wings = rbind(wings, wingsMA)
+
+geoDataMA = dataMA[,c("file", "sample", "latitude", "longitude", "date")]
+
+geoDataMA = data.frame(file = dataMA$file,
+                       sample = dataMA$sample,
+                       latitude = dataMA$latitude,
+                       longitude = dataMA$longitude,
+                       date = dataMA$date,
+                       resolution = NA,
+                       climate = dataMA$notes)
+geoDataDZ = geoData
+geoData = rbind(geoData, geoDataMA)
+
+```
+
+## GPA
+
+```{r GPA}
+
+# Convert from 2D array to 3D array
+wings3D <- arrayspecs(wings[xyNames], p, k)
+dimnames(wings3D)[[3]] <- wings$file
+
+# Align the coordinates using Generalized Procrustes Analysis 
+GPA <- gpagen(wings3D, print.progress = FALSE)
+
+# plot landmarks after alignment
+plotAllSpecimens(GPA$coords,links=links.apis,label=TRUE,
+                 plot_param = list(pt.bg = "black", pt.cex = 0.5,
+                                   mean.bg = "red", mean.cex=1, link.col="red",
+                                   txt.pos=3, txt.cex=1))
+
+# Convert from 3D array to 2D array
+wingsAligned <- two.d.array(GPA$coords) 
+colnames(wingsAligned) = xyNames
+wingsAligned = as.data.frame(wingsAligned)
+
+samples <- aggregate(wingsAligned, by = list(geoData$sample), FUN = mean)
+samples <- data.frame(samples, row.names = 1) # move column 1 to row names
+
+geoDataSample <- aggregate(geoData[c("latitude", "longitude", "date")], by = list(geoData$sample), FUN = mean)
+gr = aggregate(climate ~ sample, data = geoData, FUN = unique)
+geoDataSample$climate = gr$climate
+
+geoDataSample <- data.frame(geoDataSample, row.names = 1) # move column 1 to row names
+
+samples = cbind(samples, geoDataSample)
+samples$climate <- factor(samples$climate, levels = c("desert", "semiarid", "Mediterranean"))  #specify order
+samplesAll = samples
+samples = samplesAll[samplesAll$climate %in% c("desert", "semiarid", "Mediterranean"),]
+
+```
+
+## Sample size
+
+```{r n}
+
+# number of wings
+nrow(geoDataDZ)
+# number of wings per species
+table(geoDataDZ$climate)
+
+# number of samples
+nrow(samples)
+# number of samples per species
+table(samples$climate)
+
+```
+
+## Maps
+
+```{r map}
+
+# Read elevation data
+elev <- rast("X:/WorldClim/wc2.1_2.5m_elev.tif")
+
+colorElev <- colorRampPalette(c("#f7f7f7", "#f0f0f0", "#d9d9d9", "#bdbdbd", "#636363"), bias=3)
+
+xMin = -10
+xMax = 15
+yMin = 19
+yMax = 40
+e <- ext(xMin - 5, xMax + 5, yMin - 5, yMax + 5) 
+elev = crop(elev, e)
+elevDf <- as.data.frame(elev, xy = TRUE, na.rm = TRUE)
+colnames(elevDf) <- c("longitude", "latitude", "altitude")
+
+world <- ne_countries(scale = "medium", returnclass = "sf")
+
+ggplot(data = world) +
+  geom_raster(data = elevDf, aes(longitude, latitude, fill = altitude)) +
+  scale_fill_gradientn(
+    colours = colorElev(100),
+    guide = guide_colorbar(order = 3)
+  ) +
+  geom_sf(fill = NA) +
+  coord_sf(xlim = c(xMin, xMax), ylim = c(yMin, yMax)) +
+  geom_jitter(data = samples, aes(x = longitude, y = latitude, color = climate), size = pointSize, width = 0.1, height = 0.1) +
+  scale_color_manual(
+    values = c("red", "yellow", "green"),
+    guide = guide_legend(order = 1)
+  ) +
+  theme(legend.position="right") 
+
+```
+
+## Classification as lineages
+Comparison with lineages dataset <a href="#Nawrocka et al., 2018a">Nawrocka et al., (2018a)</a>, <a href="#Nawrocka et al., 2018b">Nawrocka et al., (2018b)</a>
+
+```{r class-lin}
+idData = xml2gmLdaData("https://zenodo.org/records/14054009/files/apis-mellifera-lineage.dw.xml")
+
+id = gmLdaData2id(idData,
+                  samples[, xyNames],
+                  average = FALSE)
+
+id$plot
+table(id$id$group)
+pTab = as.data.frame(id$P)
+
+# colony with minimum probability of classification as lineage A
+pTab[which.min(pTab$A), ]
+# colony with maximum probability of classification as lineage C
+pTab[which.max(pTab$C), ]
+# colony with maximum probability of classification as lineage M
+pTab[which.max(pTab$M), ]
+# colony with maximum probability of classification as lineage O
+pTab[which.max(pTab$O), ]
+
+```
+
+## PCA
+
+```{r PCA}
+
+PCA <- prcomp(samples[ , xyNames])
+PCscores <- as.data.frame(PCA$x)
+PCscores <- cbind(PCscores, samples[, c("latitude", "longitude", "climate")])
+
+# create plot labels
+variance.tab <- summary(PCA)$importance
+variance <- variance.tab["Proportion of Variance", "PC1"]
+variance <- round(100 * variance, 1)
+label.x <- paste0("PC1 (", variance, "%)")
+variance <- variance.tab["Proportion of Variance", "PC2"]
+variance <- round(100 * variance, 1)
+label.y <- paste0("PC2 (", variance, "%)")
+
+grN = 3
+figPca = ggplot(PCscores, aes(x = PC1, y = PC2, color = climate)) +
+  geom_point() +
+  scale_color_manual(name = "", values = rainbow(grN)) +
+  stat_ellipse() + 
+  xlab(label.x) + ylab(label.y)
+figPca
+
+```
+
+## Differences between climates
+
+```{r manova}
+
+samples3D <- arrayspecs(samples[, xyNames], p, k)
+gdf <- geomorph.data.frame(coords = samples3D, 
+                           climate = samples$climate)
+gdf$climate <- factor(gdf$climate)
+
+
+fit <- procD.lm(
+  coords ~ climate,
+  data = gdf
+)
+summary(fit)
+
+PW <- pairwise(fit, groups = gdf$climate)
+# distances among means
+summary(PW, confidence = 0.95, test.type = "dist") 
+# correlation between mean vectors (angles in degrees)
+summary(PW, confidence = 0.95, test.type = "VC", 
+   angle.type = "deg")
+
+# desert - Mediteranean
+DZde_mean <- mshape(samples3D[,, which(samples$climate == "desert")])
+DZme_mean <- mshape(samples3D[,, which(samples$climate == "Mediterranean")])
+plotRefToTarget(DZde_mean, DZme_mean,
+                mag=4, links=links.apis, gridPars = GP1, method = "points")
+legend(
+  "bottomleft",
+  legend = c("desert", "Mediteranean"),
+  pch = 21,
+  pt.bg = c("blue", "red"),
+  bty = "n"
+)
+
+# desert-semiarid
+DZse_mean <- mshape(samples3D[,, which(samples$climate == "semiarid")])
+plotRefToTarget(DZde_mean, DZse_mean,
+                mag=4, links=links.apis, gridPars = GP1, method = "points")
+legend(
+  "bottomleft",
+  legend = c("desert", "semiarid"),
+  pch = 21,
+  pt.bg = c("blue", "red"),
+  bty = "n"
+)
+
+# semiarid-Mediteranean
+plotRefToTarget(DZse_mean, DZme_mean,
+                mag=4, links=links.apis, gridPars = GP1, method = "points")
+legend(
+  "bottomleft",
+  legend = c("semiarid", "Mediteranean"),
+  pch = 21,
+  pt.bg = c("blue", "red"),
+  bty = "n"
+)
+
+```
+
+
+## LDA climate
+
+```{r LDA}
+# use equal prior probability for all groups
+grN <- length(unique(PCscores$climate)) # number of groups
+sample.cva <- CVA(PCscores[pcNames], PCscores$climate,
+                  rounds = 10000, cv = TRUE,
+                  prior = rep(1/grN, grN))
+sample.cva.scores <- as.data.frame(sample.cva$CVscores)
+# rename variable names from CV to LD otherwise use `CV 1`
+colnames(sample.cva.scores) <- gsub("CV ", "LD", colnames(sample.cva.scores)) 
+# sample.cva.scores <- cbind(sample.geoData, sample.cva.scores)
+sample.cva.scores$climate = PCscores$climate
+
+figLda = ggplot(sample.cva.scores, aes(x = LD1, y = LD2, color = climate)) +
+  geom_point() +
+  scale_color_manual(name = "", values = rainbow(grN)) +
+  stat_ellipse()
+figLda
+
+ggarrange(figPca,
+          figLda,
+          labels = c("a", "b"),
+          font.label = list(size = 12, face = "bold"),
+          ncol = 2, nrow = 1, common.legend = TRUE, legend="bottom")
+
+# Confusion matrix
+# Classification of the samples to groups
+LDA.class <- typprobClass(sample.cva$CVscores, groups = as.factor(sample.cva.scores$climate), outlier = 0)
+print(LDA.class)
+
+# Mahalanobis distances between groups
+knitr::kable(as.data.frame(as.matrix(sample.cva$Dist$GroupdistMaha)), digits = 3)
+# pairwise probabilities of differences between groups
+knitr::kable(as.data.frame(as.matrix(sample.cva$Dist$probsMaha)), digits = 5)
+
+MD = as.matrix(sample.cva$Dist$GroupdistMaha)
+tree = upgma(MD)
+plot(tree)
+
+```
+
+## LDA subspecies
+
+```{r LDA-sub}
+PCA <- prcomp(samplesAll[ , xyNames])
+PCscores <- as.data.frame(PCA$x)
+PCscores$gr = geoDataSample$climate
+
+# use equal prior probability for all groups
+grN <- length(unique(PCscores$gr)) # number of groups
+sample.cva <- CVA(PCscores[pcNames], PCscores$gr,
+                  rounds = 10000, cv = TRUE,
+                  prior = rep(1/grN, grN))
+sample.cva.scores <- as.data.frame(sample.cva$CVscores)
+# rename variable names from CV to LD otherwise use `CV 1`
+colnames(sample.cva.scores) <- gsub("CV ", "LD", colnames(sample.cva.scores)) 
+# sample.cva.scores <- cbind(sample.geoData, sample.cva.scores)
+sample.cva.scores$gr = PCscores$gr
+
+ggplot(sample.cva.scores, aes(x = LD1, y = LD2, color = gr)) +
+  geom_point() +
+  scale_color_manual(name = "", values = c(rainbow(3), "gray", "black")) +
+  stat_ellipse()
+
+# Confusion matrix
+# Classification of the samples to groups
+LDA.class <- typprobClass(sample.cva$CVscores, groups = as.factor(sample.cva.scores$gr), outlier = 0)
+print(LDA.class)
+
+# Mahalanobis distances between groups
+knitr::kable(as.data.frame(as.matrix(sample.cva$Dist$GroupdistMaha)), digits = 3)
+# pairwise probabilities of differences between groups
+knitr::kable(as.data.frame(as.matrix(sample.cva$Dist$probsMaha)), digits = 5)
+
+```
+
+## References
+
+<p id="Bakhchou et al., 2025">
+Bakhchou, S., Aglagane, A., Tofilski, A., Mokrini, F., Er-Rguibi, O., El Mouden, E. H., Machlowska, J., Fellahi, S., & Mohssine, E. H. (2025). Morphological Diversity of Moroccan Honey Bees (*Apis mellifera* L. 1758): Insights from a Geometric Morphometric Study of Wing Venation in Honey Bees from Different Climatic Regions. Diversity, 17(8), 527. <https://doi.org/10.3390/d17080527>
+</p>
+<p id="Haider & Tofilski, 2024">
+Haider, Y., & Tofilski, A. (2024). Fore wing images of honey bees (*Apis mellifera*) from Algeria 2024 [Dataset]. Zenodo. <https://doi.org/10.5281/zenodo.13939415>
+</p>
+<p id="Haider & Tofilski, 2026">
+Haider, Y., & Tofilski, A. (2026). Fore wing images of honey bees (*Apis mellifera*) from Algeria 2025 [Dataset]. Zenodo. <https://doi.org/10.5281/zenodo.18360081>
+</p>
+<p id="Nawrocka et al., 2018a">
+Nawrocka, A., Kandemir, İ., Fuchs, S., & Tofilski, A. (2018). Computer software for identification of honey bee subspecies and evolutionary lineages. Apidologie, 49(2), 172-184. <https://doi.org/10.1007/s13592-017-0538-y>
+</p>
+<p id="Nawrocka et al., 2018b">
+Nawrocka, A., Kandemir, İ., Fuchs, S., & Tofiilski, A. (2018). Dataset: Computer software for identification of honey bee subspecies and evolutionary lineages. Apidologie, 49, 172–184. <https://doi.org/10.5281/zenodo.7567336>
+</p>
+<p id="Tofilski, 2026">
+Tofilski, A. (2026). Fore wing images of honey bees (*Apis mellifera*) from Algeria 2018 [Dataset]. Zenodo. <https://doi.org/10.5281/zenodo.18359322>
+</p>
+
+## Session information
+
+```{r info}
+
+sessionInfo()
+
+```
